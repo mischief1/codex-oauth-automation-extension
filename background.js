@@ -178,14 +178,32 @@ async function reuseOrCreateTab(source, url, options = {}) {
     const tabId = await getTabId(source);
     const currentTab = await chrome.tabs.get(tabId);
     const sameUrl = currentTab.url === url;
+    const shouldReloadOnReuse = sameUrl && options.reloadIfSameUrl;
 
     const registry = await getTabRegistry();
     if (sameUrl) {
       await chrome.tabs.update(tabId, { active: true });
       console.log(LOG_PREFIX, `Reused tab ${source} (${tabId}) on same URL`);
 
+      if (shouldReloadOnReuse) {
+        if (registry[source]) registry[source].ready = false;
+        await setState({ tabRegistry: registry });
+        await chrome.tabs.reload(tabId);
+
+        await new Promise((resolve) => {
+          const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 30000);
+          const listener = (tid, info) => {
+            if (tid === tabId && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(listener);
+              clearTimeout(timer);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(listener);
+        });
+      }
+
       // For dynamically injected pages like the VPS panel, re-inject immediately.
-      // Waiting for a navigation event here will hang when the URL hasn't changed.
       if (options.inject) {
         if (registry[source]) registry[source].ready = false;
         await setState({ tabRegistry: registry });
@@ -822,7 +840,10 @@ async function executeStep1(state) {
     throw new Error('No VPS URL configured. Enter VPS address in Side Panel first.');
   }
   await addLog(`Step 1: Opening VPS panel...`);
-  await reuseOrCreateTab('vps-panel', state.vpsUrl, { inject: ['content/utils.js', 'content/vps-panel.js'] });
+  await reuseOrCreateTab('vps-panel', state.vpsUrl, {
+    inject: ['content/utils.js', 'content/vps-panel.js'],
+    reloadIfSameUrl: true,
+  });
 
   await sendToContentScript('vps-panel', {
     type: 'EXECUTE_STEP',
