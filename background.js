@@ -1317,6 +1317,7 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
+const DUCK_EMAIL_MAX_ATTEMPTS = 5;
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const AUTO_STEP_DELAYS = {
   1: 2000,
@@ -1355,14 +1356,22 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  try {
-    const duckEmail = await fetchDuckEmail({ generateNew: true });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return duckEmail;
-  } catch (err) {
-    await addLog(`Duck 邮箱自动获取失败：${err.message}`, 'warn');
+  let lastDuckError = null;
+  for (let duckAttempt = 1; duckAttempt <= DUCK_EMAIL_MAX_ATTEMPTS; duckAttempt++) {
+    try {
+      if (duckAttempt > 1) {
+        await addLog(`Duck 邮箱：正在进行第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
+      }
+      const duckEmail = await fetchDuckEmail({ generateNew: true });
+      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试，Duck 第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
+      return duckEmail;
+    } catch (err) {
+      lastDuckError = err;
+      await addLog(`Duck 邮箱自动获取失败（${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+    }
   }
 
+  await addLog(`Duck 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastDuckError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取 Duck 邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
